@@ -14,6 +14,7 @@
     "created_date",
     "database_connection_string",
     "database_query",
+    "dependency_monitor_id",
     "description",
     "dns_last_result",
     "dns_resolve_server",

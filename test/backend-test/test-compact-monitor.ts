@@ -21,6 +21,15 @@ function preload(overrides = {}) {
 }
 
 describe("toCompactMonitor()", () => {
+    test("includes dependency configuration without affecting active status", () => {
+        const compact = toCompactMonitor(
+            { id: 1, name: "API", type: "http", interval: 60, dependency_monitor_id: 2 },
+            preload()
+        );
+        assert.strictEqual(compact.dependencyMonitorId, 2);
+        assert.strictEqual(compact.active, true);
+    });
+
     test("keeps the fields the dashboard uses", () => {
         const monitor = { id: 1, name: "API", type: "http", parent: null, interval: 60, weight: 2000 };
 
@@ -32,6 +41,7 @@ describe("toCompactMonitor()", () => {
             type: "http",
             active: true,
             parent: null,
+            dependencyMonitorId: null,
             childrenIDs: [2, 3],
             tags: [{ tag_id: 5, name: "env" }],
             path: ["Group", "Child"],

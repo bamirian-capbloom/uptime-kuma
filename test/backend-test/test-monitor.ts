@@ -44,6 +44,16 @@ function preloadFor(id) {
 }
 
 describe("Monitor", () => {
+    test("serializes dependency IDs independently of monitor status", () => {
+        for (const dependency of [undefined, null, 2]) {
+            const monitor = monitorWith({ id: 1, dependency_monitor_id: dependency });
+            const json = monitor.toJSON(preloadFor(1));
+            assert.strictEqual(json.dependencyMonitorId, dependency ?? null);
+            assert.strictEqual(json.active, true);
+            assert.strictEqual(json.forceInactive, false);
+        }
+    });
+
     describe("getUrl()", () => {
         test("returns a URL object for a valid url", () => {
             const monitor = monitorWith({ url: "https://example.com/path?q=1" });

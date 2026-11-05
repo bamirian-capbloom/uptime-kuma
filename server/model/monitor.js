@@ -65,6 +65,7 @@ const { promisify } = require("node:util");
 const brotliCompress = promisify(zlib.brotliCompress);
 const DomainExpiry = require("./domain_expiry");
 const { monitorConfigSchema } = require("../types");
+const { withMonitorDependencyLock } = require("../monitor-dependency");
 
 const rootCertificates = rootCertificatesFingerprints();
 
@@ -133,6 +134,7 @@ class Monitor extends BeanModel {
             path,
             pathName,
             parent: this.parent,
+            dependencyMonitorId: this.dependency_monitor_id ?? null,
             childrenIDs: preloadData.childrenIDs.get(this.id) || [],
             url: this.url,
             wsIgnoreSecWebsocketAcceptHeader: this.getWsIgnoreSecWebsocketAcceptHeader(),
@@ -2108,16 +2110,27 @@ class Monitor extends BeanModel {
      * @returns {Promise<void>}
      */
     static async deleteMonitor(monitorID) {
-        const server = UptimeKumaServer.getInstance();
+        return withMonitorDependencyLock(async () => {
+            const server = UptimeKumaServer.getInstance();
 
-        // Stop the monitor if it's running
-        if (monitorID in server.monitorList) {
-            await server.monitorList[monitorID].stop();
-            delete server.monitorList[monitorID];
-        }
+            // Stop the monitor if it's running
+            if (monitorID in server.monitorList) {
+                await server.monitorList[monitorID].stop();
+                delete server.monitorList[monitorID];
+            }
 
-        // Delete from database
-        await R.exec("DELETE FROM monitor WHERE id = ? ", [monitorID]);
+            // Explicit cleanup also works when SQLite foreign keys are disabled.
+            await R.knex.transaction(async (trx) => {
+                await trx("monitor").where("dependency_monitor_id", monitorID).update({ dependency_monitor_id: null });
+                await trx("monitor").where("id", monitorID).del();
+            });
+
+            for (const monitor of Object.values(server.monitorList)) {
+                if (monitor.dependency_monitor_id === Number(monitorID)) {
+                    monitor.dependency_monitor_id = null;
+                }
+            }
+        });
     }
 
     /**
