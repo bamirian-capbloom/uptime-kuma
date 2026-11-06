@@ -231,6 +231,66 @@ test("API", async (t) => {
         }
     });
 
+    await t.test("push status notifications use dependency suppression and retain true heartbeats", async () => {
+        const { default: Monitor } = await import("../../server/model/monitor");
+        const { default: apiRouter } = await import("../../server/routers/api-router");
+        const parent = R.dispense("monitor");
+        Object.assign(parent, { name: "push-parent", type: "manual", interval: 60, active: 1 });
+        await R.store(parent);
+        const child = R.dispense("monitor");
+        Object.assign(child, {
+            name: "push-child",
+            type: "push",
+            interval: 60,
+            active: 1,
+            push_token: "dependency-push-test",
+            dependency_monitor_id: parent.id,
+            maxretries: 0,
+            resendInterval: 0,
+        });
+        await R.store(child);
+        await R.knex("monitor_notification_state").insert({ monitor_id: parent.id, status: 0 });
+        const originalSend = Monitor.sendNotification;
+        const originalStats = Monitor.sendStats;
+        const notifications: number[] = [];
+        Monitor.sendNotification = async (_first, _monitor, heartbeat) => {
+            notifications.push(heartbeat.status);
+        };
+        Monitor.sendStats = async () => {};
+        const app = express();
+        app.use(apiRouter);
+        const httpServer = app.listen(0, "127.0.0.1");
+        await new Promise((resolve) => httpServer.once("listening", resolve));
+        const baseUrl = `http://127.0.0.1:${(httpServer.address() as AddressInfo).port}`;
+        const push = async (status: string) => {
+            const response = await fetch(`${baseUrl}/api/push/dependency-push-test?status=${status}`);
+            assert.strictEqual(response.status, 200);
+            assert.deepStrictEqual(await response.json(), { ok: true });
+        };
+        try {
+            await push("down");
+            await push("down");
+            assert.deepStrictEqual(notifications, []);
+            assert.strictEqual((await Monitor.getPreviousHeartbeat(child.id)).status, 0);
+            await R.knex("monitor_notification_state").where({ monitor_id: parent.id }).update({ status: 1 });
+            await push("down");
+            await push("down");
+            await push("up");
+            assert.deepStrictEqual(notifications, [0, 1]);
+            await R.knex("monitor_notification_state").where({ monitor_id: parent.id }).update({ status: 0 });
+            await push("down");
+            await push("up");
+            assert.deepStrictEqual(notifications, [0, 1]);
+            assert.strictEqual((await Monitor.getPreviousHeartbeat(child.id)).status, 1);
+        } finally {
+            Monitor.sendNotification = originalSend;
+            Monitor.sendStats = originalStats;
+            await new Promise((resolve) => httpServer.close(resolve));
+            await R.trash(child);
+            await R.trash(parent);
+        }
+    });
+
     await t.test("GET /api/openapi.json documents /api/info and /api/docs serves the UI", async () => {
         const { default: apiRouter } = await import("../../server/routers/api-router");
         const app = express();

@@ -1,3 +1,4 @@
+const { processDependencyNotification } = require("../dependency-notification");
 let express = require("express");
 const { allowDevAllOrigin, allowAllOrigin, percentageToColor, filterAndJoin, sendHttpError } = require("../util");
 const { R } = require("redbean-node");
@@ -434,12 +435,13 @@ router.all("/api/push/:pushToken", async (request, response) => {
 
         bean.important = Monitor.isImportantBeat(isFirstBeat, previousHeartbeat?.status, bean.status);
 
+        let notificationRequested = false;
         if (Monitor.isImportantForNotification(isFirstBeat, previousHeartbeat?.status, bean.status)) {
             // Reset down count
             bean.downCount = 0;
 
             log.debug("monitor", `[${monitor.name}] sendNotification`);
-            await Monitor.sendNotification(isFirstBeat, monitor, bean);
+            notificationRequested = true;
         } else {
             if (bean.status === DOWN && monitor.resendInterval > 0) {
                 ++bean.downCount;
@@ -449,7 +451,7 @@ router.all("/api/push/:pushToken", async (request, response) => {
                         "monitor",
                         `[${monitor.name}] sendNotification again: Down Count: ${bean.downCount} | Resend Interval: ${monitor.resendInterval}`
                     );
-                    await Monitor.sendNotification(isFirstBeat, monitor, bean);
+                    notificationRequested = true;
 
                     // Reset down count
                     bean.downCount = 0;
@@ -457,9 +459,16 @@ router.all("/api/push/:pushToken", async (request, response) => {
             }
         }
 
+        const dependencyNotification = await processDependencyNotification(
+            monitor,
+            bean,
+            previousHeartbeat,
+            notificationRequested,
+            () => Monitor.sendNotification(isFirstBeat, monitor, bean)
+        );
         await R.store(bean);
 
-        emitHeartbeat(io, bean.toJSON());
+        emitHeartbeat(io, { ...bean.toJSON(), dependencyNotification });
 
         Monitor.sendStats(io, monitor.id);
 

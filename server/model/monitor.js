@@ -65,6 +65,7 @@ const { promisify } = require("node:util");
 const brotliCompress = promisify(zlib.brotliCompress);
 const DomainExpiry = require("./domain_expiry");
 const { monitorConfigSchema } = require("../types");
+const { processDependencyNotification } = require("../dependency-notification");
 const { withMonitorDependencyLock } = require("../monitor-dependency");
 
 const rootCertificates = rootCertificatesFingerprints();
@@ -986,6 +987,8 @@ class Monitor extends BeanModel {
             log.debug("monitor", `[${this.name}] Check isImportant`);
             let isImportant = Monitor.isImportantBeat(isFirstBeat, previousBeat?.status, bean.status);
 
+            let notificationRequested = false;
+
             // Mark as important if status changed, ignore pending pings,
             // Don't notify if disrupted changes to up
             if (isImportant) {
@@ -993,7 +996,7 @@ class Monitor extends BeanModel {
 
                 if (Monitor.isImportantForNotification(isFirstBeat, previousBeat?.status, bean.status)) {
                     log.debug("monitor", `[${this.name}] sendNotification`);
-                    await Monitor.sendNotification(isFirstBeat, this, bean);
+                    notificationRequested = true;
                 } else {
                     log.debug(
                         "monitor",
@@ -1020,13 +1023,21 @@ class Monitor extends BeanModel {
                             "monitor",
                             `[${this.name}] sendNotification again: Down Count: ${bean.downCount} | Resend Interval: ${this.resendInterval}`
                         );
-                        await Monitor.sendNotification(isFirstBeat, this, bean);
+                        notificationRequested = true;
 
                         // Reset down count
                         bean.downCount = 0;
                     }
                 }
             }
+
+            this.dependencyNotification = await processDependencyNotification(
+                this,
+                bean,
+                previousBeat,
+                notificationRequested,
+                () => Monitor.sendNotification(isFirstBeat, this, bean)
+            );
 
             if (bean.status !== MAINTENANCE && Boolean(this.domainExpiryNotification)) {
                 try {
@@ -1082,7 +1093,7 @@ class Monitor extends BeanModel {
 
             // Send to frontend
             log.debug("monitor", `[${this.name}] Send to socket`);
-            emitHeartbeat(io, bean.toJSON());
+            emitHeartbeat(io, { ...bean.toJSON(), dependencyNotification: this.dependencyNotification });
             Monitor.sendStats(io, this.id);
 
             // Store to database
