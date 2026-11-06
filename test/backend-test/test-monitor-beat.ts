@@ -1,4 +1,4 @@
-import { afterEach, describe, test } from "node:test";
+import { before, after, beforeEach, afterEach, describe, test } from "node:test";
 import assert from "node:assert";
 import { createRequire } from "node:module";
 import http from "node:http";
@@ -10,6 +10,29 @@ const { R } = require("redbean-node");
 const { UptimeCalculator } = require("../../server/uptime-calculator");
 const { Prometheus } = require("../../server/prometheus");
 import { socketRoom } from "../../server/heartbeat-emit";
+
+// Notification incident state is persisted independently from mocked heartbeats.
+const notificationDB = require("knex")({
+    client: "better-sqlite3",
+    connection: { filename: ":memory:" },
+    useNullAsDefault: true,
+});
+before(async () => {
+    R.setup(notificationDB);
+    await notificationDB.schema.createTable("monitor", (table) => {
+        table.integer("id").primary();
+        table.boolean("active");
+        table.integer("dependency_monitor_id");
+    });
+    await notificationDB("monitor").insert({ id: 9002 });
+    await require("../../db/knex_migrations/2026-11-06-0000-dependency-notification-state").up(notificationDB);
+});
+beforeEach(async () => {
+    await notificationDB("monitor_notification_state").del();
+});
+after(async () => {
+    await notificationDB.destroy();
+});
 
 // Self-signed certificate for 127.0.0.1, tests only
 const TEST_CERT = `-----BEGIN CERTIFICATE-----
@@ -91,12 +114,13 @@ afterEach(() => {
 });
 
 /**
- * Start an HTTP server that answers every request with 200 OK
+ * Start an HTTP server with a configurable response status
+ * @param {number} status HTTP response status
  * @returns {Promise<{url: string, close: Function}>} Server URL and closer
  */
-async function localServer() {
+async function localServer(status = 200) {
     const server = http.createServer((req, res) => {
-        res.writeHead(200, { "Content-Type": "text/plain" });
+        res.writeHead(status, { "Content-Type": "text/plain" });
         res.end("OK");
     });
     await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -234,57 +258,75 @@ describe("Monitor beat over HTTP", () => {
         }
     });
 
-    test("checks, emits the heartbeat and updates prometheus", async () => {
-        const server = await localServer();
-        const monitor = fakeMonitor(server.url);
-        const io = fakeIo();
+    for (const suppressed of [false, true]) {
+        test(`checks, emits and stores true status with suppression=${suppressed}`, async () => {
+            const server = await localServer(suppressed ? 503 : 200);
+            const monitor = fakeMonitor(server.url);
+            if (suppressed) {
+                monitor.dependency_monitor_id = 9003;
+                await notificationDB("monitor").insert({ id: 9003, active: true });
+                await notificationDB("monitor_notification_state").insert({ monitor_id: 9003, status: 0 });
+            }
+            const io = fakeIo();
 
-        R.findOne = async () => null;
-        R.dispense = () => ({
-            monitor_id: monitor.id,
-            toJSON() {
-                return { monitor_id: this.monitor_id, status: this.status, msg: this.msg };
-            },
+            R.findOne = async () => null;
+            R.dispense = () => ({
+                monitor_id: monitor.id,
+                toJSON() {
+                    return { monitor_id: this.monitor_id, status: this.status, msg: this.msg };
+                },
+            });
+            const stored = [];
+            R.store = async (bean) => {
+                stored.push(bean.status);
+            };
+            R.isoDateTimeMillis = () => "2024-01-01 00:00:00";
+            UptimeCalculator.getUptimeCalculator = async () => ({
+                update: async () => ({ unix: () => 1704067200 }),
+            });
+            const notifications = [];
+            Monitor.sendNotification = async () => {
+                notifications.push(true);
+            };
+            Monitor.isUnderMaintenance = async () => false;
+            const prometheusUpdates = [];
+            let beatDone;
+            const beatFinished = new Promise((resolve) => {
+                beatDone = resolve;
+            });
+            Prometheus.prototype.update = (...args) => {
+                prometheusUpdates.push(args);
+                beatDone();
+            };
+            Prometheus.prototype.remove = () => {};
+
+            Monitor.sendStats = async () => {};
+
+            try {
+                await monitor.start(io, 0);
+                // Prometheus is updated after the heartbeat was emitted and stored
+                await Promise.race([
+                    beatFinished,
+                    new Promise((_, reject) => setTimeout(() => reject(new Error("beat timeout")), 5000)),
+                ]);
+                await new Promise((resolve) => setImmediate(resolve));
+
+                const heartbeat = io.events.find((event) => event.event === "heartbeat");
+                assert.ok(heartbeat, "heartbeat emitted");
+                assert.strictEqual(heartbeat.args[0].status, suppressed ? 0 : 1);
+                assert.deepStrictEqual(stored, [suppressed ? 0 : 1]);
+                assert.strictEqual(notifications.length, suppressed ? 0 : 1);
+                if (suppressed) {
+                    assert.strictEqual(heartbeat.args[0].dependencyNotification.suppressedByMonitorId, 9003);
+                }
+                assert.strictEqual(prometheusUpdates.length, 1, "prometheus updated once");
+                assert.strictEqual(prometheusUpdates[0][0].status, heartbeat.args[0].status);
+            } finally {
+                monitor.stop();
+                await server.close();
+            }
         });
-        R.store = async () => {};
-        R.isoDateTimeMillis = () => "2024-01-01 00:00:00";
-        UptimeCalculator.getUptimeCalculator = async () => ({
-            update: async () => ({ unix: () => 1704067200 }),
-        });
-        Monitor.sendNotification = async () => {};
-        Monitor.isUnderMaintenance = async () => false;
-        const prometheusUpdates = [];
-        let beatDone;
-        const beatFinished = new Promise((resolve) => {
-            beatDone = resolve;
-        });
-        Prometheus.prototype.update = (...args) => {
-            prometheusUpdates.push(args);
-            beatDone();
-        };
-        Prometheus.prototype.remove = () => {};
-
-        Monitor.sendStats = async () => {};
-
-        try {
-            await monitor.start(io, 0);
-            // Prometheus is updated after the heartbeat was emitted and stored
-            await Promise.race([
-                beatFinished,
-                new Promise((_, reject) => setTimeout(() => reject(new Error("beat timeout")), 5000)),
-            ]);
-            await new Promise((resolve) => setImmediate(resolve));
-
-            const heartbeat = io.events.find((event) => event.event === "heartbeat");
-            assert.ok(heartbeat, "heartbeat emitted");
-            assert.strictEqual(heartbeat.args[0].status, 1);
-            assert.strictEqual(prometheusUpdates.length, 1, "prometheus updated once");
-            assert.strictEqual(prometheusUpdates[0][0].status, heartbeat.args[0].status);
-        } finally {
-            monitor.stop();
-            await server.close();
-        }
-    });
+    }
 
     test("uses the proxy agents of an active proxy", async () => {
         const server = await localServer();
