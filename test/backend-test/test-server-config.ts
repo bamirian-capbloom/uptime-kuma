@@ -66,6 +66,7 @@ describe("getMonitorJSONList()", () => {
             type: "http",
             active: true,
             parent: null,
+            dependencyMonitorId: null,
             childrenIDs: [],
             tags: [],
             path: ["Group"],

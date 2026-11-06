@@ -17,6 +17,7 @@ import { getRandomInt, isDevEnv, log, sleep } from "../src/util";
 import { auth, createHeaders, doubleCheckPassword, getDisableAuthSession, getSessionFromHeaders } from "./better-auth";
 import { createBetterAuthRouter, needSetup } from "./routers/better-auth-router";
 import { readApiKey } from "./auth";
+import { assertMonitorAccess, saveMonitorWithDependency } from "./monitor-dependency";
 import { initAdminFromEnv } from "./initial-admin";
 import { betterAuthSocketHandler } from "./socket-handlers/better-auth-socket-handler";
 import { loadEnvFile } from "node:process";
@@ -444,6 +445,10 @@ app.use(function (req, res, next) {
             try {
                 checkLogin(socket);
                 let bean = R.dispense("monitor");
+                const dependencyMonitorId = monitor.dependencyMonitorId;
+                // Dependency writes must go through validation, including imported payloads.
+                delete monitor.dependencyMonitorId;
+                delete monitor.dependency_monitor_id;
 
                 let notificationIDList = monitor.notificationIDList;
                 delete monitor.notificationIDList;
@@ -491,7 +496,7 @@ app.use(function (req, res, next) {
 
                 bean.validate();
 
-                await R.store(bean);
+                await saveMonitorWithDependency(bean, dependencyMonitorId, socket.userID);
 
                 await updateMonitorNotification(bean.id, notificationIDList);
 
@@ -526,6 +531,7 @@ app.use(function (req, res, next) {
                 checkLogin(socket);
 
                 let bean = await R.findOne("monitor", " id = ? ", [monitor.id]);
+                assertMonitorAccess(bean, socket.userID);
 
                 // Check if Parent is Descendant (would cause endless loop)
                 if (monitor.parent !== null) {
@@ -672,7 +678,7 @@ app.use(function (req, res, next) {
 
                 bean.validate();
 
-                await R.store(bean);
+                await saveMonitorWithDependency(bean, monitor.dependencyMonitorId, socket.userID);
 
                 if (removeGroupChildren) {
                     await Monitor.unlinkAllChildren(monitor.id);
@@ -724,6 +730,7 @@ app.use(function (req, res, next) {
                 log.info("monitor", `Get Monitor: ${monitorID} User ID: ${socket.userID}`);
 
                 let monitor = await R.findOne("monitor", " id = ? ", [monitorID]);
+                assertMonitorAccess(monitor, socket.userID);
                 const monitorData = [{ id: monitor.id, active: monitor.active }];
                 const preloadData = await Monitor.preparePreloadData(monitorData);
                 callback({
@@ -865,6 +872,7 @@ app.use(function (req, res, next) {
 
                 // Check if this is a group monitor
                 const monitor = await R.findOne("monitor", " id = ? ", [monitorID]);
+                assertMonitorAccess(monitor, socket.userID);
 
                 // Log with context about deletion type
                 if (monitor && monitor.type === "group") {
@@ -933,6 +941,8 @@ app.use(function (req, res, next) {
                     msgi18n: true,
                 });
                 await server.sendDeleteMonitorFromList(socket, monitorID);
+                // Dependencies of surviving monitors may have been cleared (including recursive deletions).
+                await server.sendMonitorList(socket);
             } catch (e) {
                 callback({
                     ok: false,

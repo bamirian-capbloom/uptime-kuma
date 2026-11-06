@@ -11,6 +11,7 @@ export interface CompactMonitor {
     type: string;
     active: boolean | undefined;
     parent: number | null;
+    dependencyMonitorId: number | null;
     childrenIDs: number[];
     tags: unknown[];
     path: string[];
@@ -23,6 +24,13 @@ export interface CompactMonitor {
  * Fields the dashboard needs for one monitor. toJSON() builds ~60 fields per
  * monitor, which costs over a second for thousands of monitors at login.
  * @param monitor Monitor bean
+ * @param monitor.id Monitor ID
+ * @param monitor.name Display name
+ * @param monitor.type Monitor type
+ * @param monitor.parent Parent group ID
+ * @param monitor.dependency_monitor_id Direct dependency ID
+ * @param monitor.interval Check interval in seconds
+ * @param monitor.weight Display order weight
  * @param preloadData Data prepared for the whole list
  * @returns Slim monitor payload
  */
@@ -32,6 +40,7 @@ export function toCompactMonitor(
         name: string;
         type: string;
         parent?: number | null;
+        dependency_monitor_id?: number | null;
         interval: number;
         weight?: number | null;
     },
@@ -45,6 +54,7 @@ export function toCompactMonitor(
         type: monitor.type,
         active: preloadData.activeStatus.get(monitor.id),
         parent: monitor.parent ?? null,
+        dependencyMonitorId: monitor.dependency_monitor_id ?? null,
         childrenIDs: preloadData.childrenIDs.get(monitor.id) || [],
         tags: preloadData.tags.get(monitor.id) || [],
         path,
