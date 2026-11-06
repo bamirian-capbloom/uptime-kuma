@@ -46,6 +46,9 @@ New observations are persisted before consulting ancestors or sending notificati
 can use them before the corresponding heartbeat history write completes.
 Unknown and retrying parents defer child alerts regardless of check order.
 Concurrent push requests carrying the same stale transition are deduplicated.
+An UP following an announced DOWN uses the serialized incident state even when
+its push request read stale heartbeat history. This also preserves recovery when
+the initial DOWN push is still delivering and neither request has stored a beat.
 A parent last confirmed UP cannot predict a future failure: a child can alert
 before that parent's next check detects DOWN. No fixed grace period is imposed.
 Parent recovery releases the child on its next scheduled check, not immediately.

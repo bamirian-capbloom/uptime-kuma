@@ -251,3 +251,14 @@ test("a deleted monitor cannot send or recreate state", async () => {
     assert.equal(result.reason, "monitor-deleted");
     assert.deepEqual(sent, []);
 });
+
+test("an announced incident recovers using serialized state despite a stale UP heartbeat", async () => {
+    child.dependency_monitor_id = null;
+    await beat(child, UP, null, true);
+    sent = [];
+    await beat(child, DOWN, UP, true);
+    await beat(child, UP, UP, false);
+    // A late DOWN history write must not cause a second recovery, either.
+    await beat(child, UP, DOWN, true);
+    assert.deepEqual(sent, [DOWN, UP]);
+});

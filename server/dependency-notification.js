@@ -67,7 +67,7 @@ async function persistState(db, state) {
  * @param {object} beat Current heartbeat
  * @param {object|null} previous Previous heartbeat
  * @param {boolean} requested Legacy transition/repeat notification decision
- * @param {Function} send Send the existing notification payload
+ * @param {Function} send Send the existing payload; receives true for an announced incident's recovery
  * @returns {Promise<object>} Suppression metadata for future UI consumers
  */
 function processDependencyNotification(monitor, beat, previous, requested, send) {
@@ -108,9 +108,11 @@ function processDependencyNotification(monitor, beat, previous, requested, send)
         } else if (beat.status === UP) {
             // A suppressed incident must not produce an orphan recovery. An
             // already announced incident still recovers even if a parent fails.
-            notify = requested && (state.incident_open || (!state.deferred && priorObservedStatus !== UP));
+            notify =
+                (state.incident_open && priorObservedStatus === DOWN) ||
+                (requested && (state.incident_open || (!state.deferred && priorObservedStatus !== UP)));
             if (notify) {
-                await send();
+                await send(Boolean(state.incident_open));
             }
             state.incident_open = false;
             state.deferred = false;

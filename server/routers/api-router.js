@@ -464,7 +464,7 @@ router.all("/api/push/:pushToken", async (request, response) => {
             bean,
             previousHeartbeat,
             notificationRequested,
-            () => Monitor.sendNotification(isFirstBeat, monitor, bean)
+            (isRecovery = false) => Monitor.sendNotification(isFirstBeat && !isRecovery, monitor, bean)
         );
         await R.store(bean);
 

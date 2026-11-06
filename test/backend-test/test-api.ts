@@ -291,6 +291,116 @@ test("API", async (t) => {
         }
     });
 
+    for (const initialUp of [false, true]) {
+        await t.test(`overlapping DOWN/UP pushes recover once with initialUp=${initialUp}`, { timeout: 10000 }, async () => {
+            const { default: Monitor } = await import("../../server/model/monitor");
+            const { default: apiRouter } = await import("../../server/routers/api-router");
+            const monitor = R.dispense("monitor");
+            Object.assign(monitor, {
+                name: "overlapping-push",
+                type: "push",
+                interval: 60,
+                active: 1,
+                push_token: "overlapping-push-test",
+                maxretries: 0,
+                resendInterval: 0,
+            });
+            await R.store(monitor);
+            const originalSend = Monitor.sendNotification;
+            const originalStats = Monitor.sendStats;
+            const originalPrevious = Monitor.getPreviousHeartbeat;
+            const originalStore = R.store;
+            const notifications: number[] = [];
+            let release: () => void;
+            let started: () => void;
+            let staleRead: () => void;
+            let releaseHistory: () => void;
+            const delivery = new Promise<void>((resolve) => {
+                release = resolve;
+            });
+            const delivering = new Promise<void>((resolve) => {
+                started = resolve;
+            });
+            const read = new Promise<void>((resolve) => {
+                staleRead = resolve;
+            });
+            const history = new Promise<void>((resolve) => {
+                releaseHistory = resolve;
+            });
+            let downInFlight = false;
+            Monitor.sendNotification = async (first, _monitor, heartbeat) => {
+                // Keep the real provider entry point's initial-UP behavior.
+                if (!first || heartbeat.status === 0) {
+                    notifications.push(heartbeat.status);
+                }
+                if (heartbeat.status === 0) {
+                    downInFlight = true;
+                    started();
+                    await delivery;
+                }
+            };
+            Monitor.sendStats = async () => {};
+            Monitor.getPreviousHeartbeat = async (id) => {
+                const previous = await originalPrevious.call(Monitor, id);
+                if (Number(id) === Number(monitor.id) && downInFlight) {
+                    assert.strictEqual(previous?.status ?? null, initialUp ? 1 : null);
+                    staleRead();
+                }
+                return previous;
+            };
+            R.store = async (bean) => {
+                const target = Number(bean.monitor_id) === Number(monitor.id) && downInFlight;
+                if (target && bean.status === 0) {
+                    await history;
+                }
+                const id = await originalStore.call(R, bean);
+                if (target && bean.status === 1) {
+                    releaseHistory();
+                }
+                return id;
+            };
+            const app = express();
+            app.use(apiRouter);
+            const httpServer = app.listen(0, "127.0.0.1");
+            await new Promise((resolve) => httpServer.once("listening", resolve));
+            const baseUrl = `http://127.0.0.1:${(httpServer.address() as AddressInfo).port}`;
+            const push = async (status: string) => {
+                const response = await fetch(`${baseUrl}/api/push/overlapping-push-test?status=${status}`);
+                assert.strictEqual(response.status, 200);
+                assert.deepStrictEqual(await response.json(), { ok: true });
+            };
+            const requests: Promise<void>[] = [];
+            try {
+                if (initialUp) {
+                    await push("up");
+                }
+                requests.push(push("down"));
+                await delivering;
+                requests.push(push("up"));
+                await read;
+                release();
+                await Promise.all(requests);
+                downInFlight = false;
+                assert.strictEqual((await originalPrevious.call(Monitor, monitor.id)).status, 0);
+                await push("up");
+                assert.deepStrictEqual(notifications, [0, 1]);
+                const state = await R.knex("monitor_notification_state").where({ monitor_id: monitor.id }).first();
+                assert.strictEqual(state.status, 1);
+                assert.strictEqual(Boolean(state.incident_open), false);
+            } finally {
+                release();
+                releaseHistory();
+                await Promise.allSettled(requests);
+                Monitor.sendNotification = originalSend;
+                Monitor.sendStats = originalStats;
+                Monitor.getPreviousHeartbeat = originalPrevious;
+                R.store = originalStore;
+                await new Promise((resolve) => httpServer.close(resolve));
+                await R.trash(monitor);
+            }
+        });
+    }
+
     await t.test("GET /api/openapi.json documents /api/info and /api/docs serves the UI", async () => {
         const { default: apiRouter } = await import("../../server/routers/api-router");
         const app = express();

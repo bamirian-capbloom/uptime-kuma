@@ -1036,7 +1036,7 @@ class Monitor extends BeanModel {
                 bean,
                 previousBeat,
                 notificationRequested,
-                () => Monitor.sendNotification(isFirstBeat, this, bean)
+                (isRecovery = false) => Monitor.sendNotification(isFirstBeat && !isRecovery, this, bean)
             );
 
             if (bean.status !== MAINTENANCE && Boolean(this.domainExpiryNotification)) {
