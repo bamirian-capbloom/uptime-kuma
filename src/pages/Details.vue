@@ -11,6 +11,7 @@
                     <div>{{ monitor.id }}</div>
                 </div>
             </h1>
+            <DependencySuppression :key="monitor.id" :monitor-id="monitor.id" class="mb-3" />
             <!-- eslint-disable-next-line vue/no-v-html-->
             <p v-if="monitor.description" v-html="descriptionHTML"></p>
             <div class="d-flex">
@@ -437,6 +438,7 @@
 </template>
 
 <script>
+import DependencySuppression from "../components/DependencySuppression.vue";
 import { defineAsyncComponent } from "vue";
 import { useToast } from "vue-toastification";
 const toast = useToast();
@@ -465,6 +467,7 @@ import ScreenshotDialog from "../components/ScreenshotDialog.vue";
 
 export default {
     components: {
+        DependencySuppression,
         Uptime,
         CountUp,
         Datetime,

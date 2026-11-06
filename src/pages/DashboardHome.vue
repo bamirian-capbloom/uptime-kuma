@@ -36,6 +36,16 @@
                 </div>
             </div>
 
+            <div v-if="suppressedMonitors.length" class="shadow-box big-padding mb-3">
+                <h2 class="h5">{{ $t("dependencyAlertsSuppressed") }}</h2>
+                <ul class="mb-0">
+                    <li v-for="monitor in suppressedMonitors" :key="monitor.id" class="mb-2">
+                        <router-link :to="`/dashboard/${monitor.id}`">{{ monitor.name }}</router-link>
+                        <DependencySuppression :monitor-id="monitor.id" class="ms-2" />
+                    </li>
+                </ul>
+            </div>
+
             <div class="shadow-box table-shadow-box table-wrapper">
                 <div class="mb-3 text-end">
                     <button
@@ -113,6 +123,7 @@
 </template>
 
 <script>
+import DependencySuppression from "../components/DependencySuppression.vue";
 import Status from "../components/Status.vue";
 import Datetime from "../components/Datetime.vue";
 import Pagination from "v-pagination-3";
@@ -120,6 +131,7 @@ import Confirm from "../components/Confirm.vue";
 
 export default {
     components: {
+        DependencySuppression,
         Datetime,
         Status,
         Pagination,
@@ -146,6 +158,15 @@ export default {
         };
     },
     computed: {
+        suppressedMonitors() {
+            if (!this.$root.socket.connected) {
+                return [];
+            }
+            return Object.keys(this.$root.dependencyObservations)
+                .map((id) => this.$root.monitorList[id])
+                .filter(Boolean);
+        },
+
         showGroupColumn() {
             return Object.values(this.$root.monitorList).some((m) => m.parent != null);
         },
