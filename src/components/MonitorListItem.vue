@@ -43,6 +43,7 @@
                             </span>
                             <div class="flex-fill text-truncate" style="min-width: 0">
                                 <div class="text-truncate">{{ monitor.name }}</div>
+                                <DependencySuppression :monitor-id="monitor.id" />
                                 <div v-if="monitor.tags.length > 0" class="tags gap-1">
                                     <Tag
                                         v-for="tag in monitor.tags"
@@ -89,6 +90,7 @@
 </template>
 
 <script>
+import DependencySuppression from "./DependencySuppression.vue";
 import HeartbeatBar from "../components/HeartbeatBar.vue";
 import Tag from "../components/Tag.vue";
 import Uptime from "../components/Uptime.vue";
@@ -97,6 +99,7 @@ import { getMonitorRelativeURL } from "../util.ts";
 export default {
     name: "MonitorListItem",
     components: {
+        DependencySuppression,
         Uptime,
         HeartbeatBar,
         Tag,

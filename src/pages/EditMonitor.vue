@@ -2197,6 +2197,37 @@
                                 </div>
                             </div>
 
+                            <div class="my-3">
+                                <label for="dependencyMonitorSelector" class="form-label">
+                                    {{ $t("Monitor Dependency") }}
+                                </label>
+                                <select
+                                    id="dependencyMonitorSelector"
+                                    v-model="monitor.dependencyMonitorId"
+                                    class="form-select"
+                                    aria-describedby="dependencyMonitorHelp"
+                                >
+                                    <option :value="null">{{ $t("None") }}</option>
+                                    <option
+                                        v-if="dependencySelectionUnavailable"
+                                        :value="monitor.dependencyMonitorId"
+                                        disabled
+                                    >
+                                        {{ $t("dependencySelectionUnavailable") }}
+                                    </option>
+                                    <option
+                                        v-for="candidate in dependencyCandidates"
+                                        :key="candidate.id"
+                                        :value="candidate.id"
+                                    >
+                                        {{ candidate.name }}
+                                    </option>
+                                </select>
+                                <div id="dependencyMonitorHelp" class="form-text">
+                                    {{ $t("dependencyMonitorHelp") }}
+                                </div>
+                            </div>
+
                             <!-- Parent Monitor -->
                             <div class="my-3">
                                 <label for="monitorGroupSelector" class="form-label">{{ $t("Monitor Group") }}</label>
@@ -3263,6 +3294,7 @@
 
 <script>
 import VueMultiselect from "vue-multiselect";
+import { dependencyChain } from "../monitor-dependency";
 import { useToast } from "vue-toastification";
 import ActionSelect from "../components/ActionSelect.vue";
 import CopyableInput from "../components/CopyableInput.vue";
@@ -3306,6 +3338,7 @@ const monitorDefaults = {
     type: "http",
     name: "",
     parent: null,
+    dependencyMonitorId: null,
     url: defaultValueList.http.url,
     wsSubprotocol: "",
     method: "GET",
@@ -3422,6 +3455,18 @@ export default {
     },
 
     computed: {
+        dependencyCandidates() {
+            return Object.values(this.$root.monitorList)
+                .filter((candidate) => dependencyChain(this.$root.monitorList, candidate.id, this.monitor.id) !== null)
+                .sort((a, b) => a.name.localeCompare(b.name) || a.id - b.id);
+        },
+        dependencySelectionUnavailable() {
+            return (
+                this.monitor.dependencyMonitorId != null &&
+                !this.dependencyCandidates.some((candidate) => candidate.id === this.monitor.dependencyMonitorId)
+            );
+        },
+
         timeoutStep() {
             return this.monitor.type === "ping" ? 1 : 0.1;
         },
@@ -4090,7 +4135,7 @@ message HealthCheckResponse {
                             }
                         }
 
-                        this.monitor = res.monitor;
+                        this.monitor = { ...res.monitor, dependencyMonitorId: res.monitor.dependencyMonitorId ?? null };
 
                         if (this.isClone) {
                             /*

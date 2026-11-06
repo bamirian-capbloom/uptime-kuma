@@ -70,6 +70,7 @@ test.describe("Monitor list actions", () => {
 
         await page.getByRole("link", { name: "Edit" }).click();
         await page.waitForURL("/edit/*");
+        await expect(page.getByTestId("friendly-name-input")).toHaveValue("Old Name");
         await page.getByTestId("friendly-name-input").fill("New Name");
         await page.getByTestId("save-button").click();
         await expect(page.locator(".Vue-Toastification__toast").first()).toContainText("Saved");
@@ -85,6 +86,7 @@ test.describe("Monitor list actions", () => {
 
         await page.getByRole("link", { name: "Clone" }).click();
         await page.waitForURL("/clone/*");
+        await expect(page.getByTestId("friendly-name-input")).toHaveValue("Clone of Original Monitor");
         await page.getByTestId("friendly-name-input").fill("Cloned Monitor");
         await page.getByTestId("save-button").click();
         await page.waitForURL(/\/dashboard\/\d+/);
@@ -101,6 +103,7 @@ test.describe("Monitor list actions", () => {
         await openDetails(page, "Group A");
         await page.getByRole("link", { name: "Edit" }).click();
         await page.waitForURL("/edit/*");
+        await expect(page.getByTestId("friendly-name-input")).toHaveValue("Group A");
         await page.getByTestId("friendly-name-input").fill("Renamed Group");
         await page.getByTestId("save-button").click();
         await expect(page.locator(".Vue-Toastification__toast").first()).toContainText("Saved");

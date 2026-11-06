@@ -1,3 +1,4 @@
+import { invalidateDependencyHistory, recordDependencyObservation } from "../monitor-dependency";
 import { markRaw } from "vue";
 import { io } from "socket.io-client";
 import { useToast } from "vue-toastification";
@@ -43,6 +44,7 @@ export default {
             monitorList: {},
             monitorTypeList: {},
             maintenanceList: {},
+            dependencyObservations: {},
             heartbeatList: {},
             // Kept in sync incrementally by the heartbeat handlers. As computed values they
             // were rebuilt over all monitors on every beat (thousands of monitors = hot loop)
@@ -87,9 +89,22 @@ export default {
 
     created() {
         this.initSocketIO();
+        window.addEventListener("offline", this.clearDependencyObservations);
+    },
+
+    beforeUnmount() {
+        window.removeEventListener("offline", this.clearDependencyObservations);
     },
 
     methods: {
+        /**
+         * Drop live suppression claims as soon as the browser goes offline.
+         * @returns {void}
+         */
+        clearDependencyObservations() {
+            this.dependencyObservations = {};
+        },
+
         /**
          * Store the newest beat of a monitor and its display status.
          * Called per beat: must stay O(1), thousands of monitors beat every minute.
@@ -183,6 +198,7 @@ export default {
             });
 
             socket.on("monitorList", (data) => {
+                this.dependencyObservations = {};
                 this.assignMonitorUrlParser(data);
                 this.monitorList = data;
                 this.monitorListLoaded = true;
@@ -202,6 +218,7 @@ export default {
             });
 
             socket.on("updateMonitorIntoList", (data) => {
+                this.dependencyObservations = {};
                 this.assignMonitorUrlParser(data);
                 Object.entries(data).forEach(([monitorID, updatedMonitor]) => {
                     this.monitorList[monitorID] = updatedMonitor;
@@ -209,6 +226,7 @@ export default {
             });
 
             socket.on("deleteMonitorFromList", (monitorID) => {
+                this.dependencyObservations = {};
                 if (this.monitorList[monitorID]) {
                     delete this.monitorList[monitorID];
                 }
@@ -250,6 +268,14 @@ export default {
             });
 
             socket.on("heartbeat", (data) => {
+                if (navigator.onLine) {
+                    recordDependencyObservation(
+                        this.dependencyObservations,
+                        this.monitorList,
+                        data,
+                        this.lastHeartbeatList
+                    );
+                }
                 if (!(data.monitorID in this.heartbeatList)) {
                     this.heartbeatList[data.monitorID] = [];
                 }
@@ -289,6 +315,12 @@ export default {
                     this.heartbeatList[monitorID] = data.concat(this.heartbeatList[monitorID]);
                 }
                 if (data.length > 0) {
+                    invalidateDependencyHistory(
+                        this.dependencyObservations,
+                        Number(monitorID),
+                        this.lastHeartbeatList[monitorID],
+                        data[data.length - 1]
+                    );
                     this.updateLastBeat(monitorID, data[data.length - 1]);
                 }
             });
@@ -298,6 +330,12 @@ export default {
                     const beats = data[monitorID];
                     applyLatestBeats(this.heartbeatList, monitorID, beats);
                     if (beats.length > 0) {
+                        invalidateDependencyHistory(
+                            this.dependencyObservations,
+                            Number(monitorID),
+                            this.lastHeartbeatList[monitorID],
+                            beats[beats.length - 1]
+                        );
                         this.updateLastBeat(monitorID, beats[beats.length - 1]);
                     }
                 }
@@ -329,6 +367,7 @@ export default {
             });
 
             socket.on("connect_error", (err) => {
+                this.dependencyObservations = {};
                 console.error(`Failed to connect to the backend. Socket.io connect_error: ${err.message}`);
                 this.connectionErrorMsg = `${this.$t("Cannot connect to the socket server.")} [${err}] ${this.$t("Reconnecting...")}`;
                 this.showReverseProxyGuide = true;
@@ -337,6 +376,7 @@ export default {
             });
 
             socket.on("disconnect", () => {
+                this.dependencyObservations = {};
                 console.log("disconnect");
                 // As we are using cookie based auth, we have to reconnect the socket
                 // avoid noise by add a delay
@@ -623,6 +663,7 @@ export default {
          */
         clearData() {
             console.log("reset heartbeat list");
+            this.dependencyObservations = {};
             this.heartbeatList = {};
             this.lastHeartbeatList = {};
             this.statusList = {};

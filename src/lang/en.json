@@ -1647,5 +1647,10 @@
     "msGraphConsent": "consent",
     "msGraphRbac": "RBAC in Exchange Online",
     "msGraphClientSecretDescription": "Learn how to {clientSecret} for your application registration.",
-    "msGraphClientSecretLink": "create a client secret"
+    "msGraphClientSecretLink": "create a client secret",
+    "Monitor Dependency": "Monitor Dependency",
+    "dependencyMonitorHelp": "Suppress failure alerts when this dependency or one of its dependencies is down. Health checks and monitor status are unchanged.",
+    "dependencySelectionUnavailable": "Current dependency unavailable. Select another monitor or None.",
+    "dependencyAlertsSuppressed": "Alerts suppressed",
+    "dependencySuppressionExplanation": "Failure alerts suppressed because {monitor} is down. Health checks and monitor status are unchanged."
 }
