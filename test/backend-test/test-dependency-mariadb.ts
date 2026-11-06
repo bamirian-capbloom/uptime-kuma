@@ -10,7 +10,9 @@ test(
     "MariaDB dependency migrations preserve old monitors, enforce cleanup and roll back",
     {
         timeout: 180000,
-        skip: Boolean(process.env.SKIP_TESTCONTAINER),
+        skip:
+            (!!process.env.CI && (process.platform !== "linux" || process.arch !== "x64")) ||
+            Boolean(process.env.SKIP_TESTCONTAINER),
     },
     async (t) => {
         const container = await new MariaDbContainer("mariadb:10.11").withStartupTimeout(90000).start();
