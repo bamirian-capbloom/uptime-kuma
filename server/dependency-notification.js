@@ -40,6 +40,26 @@ async function dependencyMetadata(monitor) {
 }
 
 /**
+ * A monitor may be deleted while its check or notification is in flight. The
+ * foreign key prevents resurrection; do not fail a completed notification when
+ * deletion won that race. Other database failures must still propagate.
+ * @param {Function} db Knex connection
+ * @param {object} state Notification state
+ * @returns {Promise<boolean>} Whether the monitor still exists
+ */
+async function persistState(db, state) {
+    try {
+        await db("monitor_notification_state").insert(state).onConflict("monitor_id").merge();
+        return true;
+    } catch (error) {
+        if (!(await db("monitor").where({ id: state.monitor_id }).first())) {
+            return false;
+        }
+        throw error;
+    }
+}
+
+/**
  * Serialize each monitor's notification decisions without blocking other checks.
  * State is independent of heartbeat status/importance and survives restarts.
  * Legacy incidents are initialized as open when their preceding beat was DOWN.
@@ -62,7 +82,9 @@ function processDependencyNotification(monitor, beat, previous, requested, send)
         state.status = beat.status;
         // Publish the check before consulting ancestors or awaiting providers.
         // A slow notification must not hide a confirmed observation from children.
-        await db("monitor_notification_state").insert(state).onConflict("monitor_id").merge();
+        if (!(await persistState(db, state))) {
+            return { suppressed: false, reason: "monitor-deleted", incidentOpen: false, deferred: false };
+        }
         const metadata = await dependencyMetadata(monitor);
         let notify = requested;
         if (beat.status === DOWN) {
@@ -73,7 +95,9 @@ function processDependencyNotification(monitor, beat, previous, requested, send)
                     (requested && (previous?.status === DOWN || priorObservedStatus !== DOWN || !state.incident_open)));
             if (notify) {
                 state.deferred = true;
-                await db("monitor_notification_state").insert(state).onConflict("monitor_id").merge();
+                if (!(await persistState(db, state))) {
+                    return { suppressed: false, reason: "monitor-deleted", incidentOpen: false, deferred: false };
+                }
                 await send();
                 beat.downCount = 0;
                 state.incident_open = true;
@@ -93,7 +117,7 @@ function processDependencyNotification(monitor, beat, previous, requested, send)
         } else {
             notify = false;
         }
-        await db("monitor_notification_state").insert(state).onConflict("monitor_id").merge();
+        await persistState(db, state);
         const currentMetadata =
             beat.status === DOWN ? metadata : { suppressed: false, waitingForMonitorId: null, reason: null };
         return { ...currentMetadata, incidentOpen: Boolean(state.incident_open), deferred: Boolean(state.deferred) };

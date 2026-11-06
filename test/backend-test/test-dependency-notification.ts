@@ -237,3 +237,17 @@ test("slow parent delivery does not block child checks or hide confirmed DOWN", 
         await parentBeat;
     }
 });
+
+test("deletion during delivery does not resurrect notification state or fail the check", async () => {
+    child.dependency_monitor_id = null;
+    await processBeat(child, { status: DOWN }, { status: UP }, true, async () => {
+        await db("monitor").where({ id: child.id }).del();
+    });
+    assert.equal(await db("monitor_notification_state").where({ monitor_id: child.id }).first(), undefined);
+});
+test("a deleted monitor cannot send or recreate state", async () => {
+    await db("monitor").where({ id: child.id }).del();
+    const result = await beat(child, DOWN, UP, true);
+    assert.equal(result.reason, "monitor-deleted");
+    assert.deepEqual(sent, []);
+});
