@@ -59,6 +59,8 @@ export default {
         tooltipStyle() {
             return {
                 left: this.x + "px",
+                // x is a physical viewport coordinate in both LTR and RTL.
+                transform: "translateX(-50%)",
                 top: this.y + "px",
             };
         },

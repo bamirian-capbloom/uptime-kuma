@@ -971,6 +971,7 @@ export default {
 }
 
 .url {
+    overflow-wrap: anywhere;
     color: $primary;
     margin-bottom: 20px;
     font-weight: bold;

@@ -122,3 +122,46 @@ test("shows backend suppression while preserving DOWN, clears stale state and su
     await page.reload();
     await expect(page.locator(".suppression-label")).toHaveCount(0);
 });
+
+test("escapes dependency names and keeps translated/RTL fallback indicators usable", async ({
+    page,
+    request,
+}, testInfo) => {
+    const name = '<img src=x onerror="window.dependencyInjected=true"> بوابة الشبكة ' + "Long gateway name ".repeat(5);
+    const gateway = await addPushMonitor(page, name);
+    const service = await addPushMonitor(page, "Locale service", gateway.id);
+    await page.evaluate(() => {
+        localStorage.locale = "ar-SY";
+    });
+    await page.reload();
+    await page.setViewportSize({ width: 390, height: 844 });
+    await expect(page.locator("html")).toHaveAttribute("dir", "rtl");
+    await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
+    await page.screenshot({ animations: "disabled" });
+    await push(request, gateway.url, "down");
+    await push(request, service.url, "down");
+    const label = page.locator(".suppression-label").last();
+    await expect(label).toBeVisible();
+    await expect(label).toHaveAttribute(
+        "aria-label",
+        `Failure alerts suppressed because ${name} is down. Health checks and monitor status are unchanged.`
+    );
+    await label.focus();
+    await page.evaluate(() => window.scrollTo(0, 0));
+    const tooltip = page.getByRole("tooltip");
+    await expect(tooltip).toContainText(name);
+    await expect(tooltip.locator("img")).toHaveCount(0);
+    await expect
+        .poll(async () => {
+            const box = await page.locator(".tooltip-wrapper").boundingBox();
+            return box && box.x >= 0 && box.x + box.width <= 390;
+        })
+        .toBe(true);
+    expect(await page.evaluate(() => window.dependencyInjected)).toBeUndefined();
+    await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
+    const bounds = await label.boundingBox();
+    expect(bounds.x).toBeGreaterThanOrEqual(0);
+    expect(bounds.x + bounds.width).toBeLessThanOrEqual(390);
+    await page.screenshot({ path: testInfo.outputPath("dependency-rtl.png"), animations: "disabled" });
+    await screenshot(testInfo, page);
+});
