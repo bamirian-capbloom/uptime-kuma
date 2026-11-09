@@ -136,6 +136,7 @@ class Monitor extends BeanModel {
             pathName,
             parent: this.parent,
             dependencyMonitorId: this.dependency_monitor_id ?? null,
+            dependencyActive: Boolean(this.active),
             childrenIDs: preloadData.childrenIDs.get(this.id) || [],
             url: this.url,
             wsIgnoreSecWebsocketAcceptHeader: this.getWsIgnoreSecWebsocketAcceptHeader(),

@@ -6,6 +6,7 @@ export interface DependencyMonitor {
     name: string;
     active?: boolean | number;
     dependencyMonitorId?: number | null;
+    dependencyActive?: boolean;
 }
 
 /**
@@ -97,7 +98,10 @@ export function dependencyObservations(
             continue;
         }
         const ancestors = dependencyChain(monitors, monitor.dependencyMonitorId, monitor.id);
-        const blockerId = ancestors?.find(id => monitors[id].active && beats[id]?.status === DOWN);
+        // The gate uses the ancestor's own active flag, even inside a paused group.
+        const blockerId = ancestors?.find(
+            (id) => (monitors[id].dependencyActive ?? monitors[id].active) && beats[id]?.status === DOWN
+        );
         if (blockerId != null) {
             observations[monitor.id] = { blockerId, ancestors: ancestors! };
         }

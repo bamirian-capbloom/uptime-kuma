@@ -190,6 +190,10 @@ test("Socket.IO monitor dependency lifecycle and independent health checks", { t
             return downBeats.data?.some((beat) => beat.status === 0) && upBeats.data?.some((beat) => beat.status === 1);
         });
         assert.equal((await get(up)).active, true);
+        const pausedGroup = await add(payload("Paused group", { type: "group", active: false }));
+        const grouped = await add(payload("Grouped ancestor", { active: true, parent: pausedGroup }));
+        assert.equal((await get(grouped)).active, false);
+        assert.equal((await get(grouped)).dependencyActive, true);
 
         // The legacy delete signature still works and survivors receive their cleared dependency.
         const updatedList = once(socket, "monitorList");

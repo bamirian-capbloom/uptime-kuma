@@ -138,6 +138,13 @@ test("shows backend suppression while preserving DOWN, clears stale state and su
     await expect(page.locator(".suppression-label").last()).toBeVisible();
     await push(request, service.url, "up");
     await expect(page.locator(".suppression-label")).toHaveCount(0);
+    // A delayed history response must not roll displayed health back to DOWN.
+    await page.evaluate((monitorId) => {
+        const root = document.querySelector("#app").__vue_app__._container._vnode.component.proxy;
+        root.updateLastBeat(monitorId, { status: 0, time: "2000-01-01 00:00:00.000" });
+    }, service.id);
+    await expect(page.getByTestId("monitor-status")).toContainText("Up");
+    await expect(page.locator(".suppression-label")).toHaveCount(0);
     await push(request, service.url, "down");
     await expect(label).toBeVisible();
     await page.context().setOffline(true);

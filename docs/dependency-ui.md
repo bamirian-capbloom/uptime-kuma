@@ -22,6 +22,9 @@ or maintenance ancestors do not block but their ancestors still can. Unknown or
 retrying states alone never establish suppression. Repeated DOWN checks preserve
 the label. Recovery, dependency edits, pause and deletion reconcile it immediately.
 The label describes current blocking of failure alerts, not past delivery success.
+Ancestor activity uses its own stored flag, matching the backend notification gate
+even when a containing group is paused; the child's displayed activity still
+controls whether its label is shown.
 
 Disconnection, browser offline events and logout clear the connection's confirmed
 observations. Login heartbeat snapshots restore labels on reload/reconnect without

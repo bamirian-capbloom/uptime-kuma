@@ -40,6 +40,15 @@ describe("dependency selection", () => {
 });
 
 describe("current suppression observations", () => {
+    test("matches the backend's own active flag for ancestors inside paused groups", () => {
+        const list = monitors();
+        const beats = { 1: { status: 0 }, 3: { status: 0 } };
+        list[1].active = false;
+        Object.assign(list[1], { dependencyActive: true });
+        assert.equal(dependencyObservations(list, beats)[3].blockerId, 1);
+        Object.assign(list[1], { dependencyActive: false });
+        assert.deepEqual(dependencyObservations(list, beats), {});
+    });
     test("repeated child, parent, intermediate and unrelated DOWN beats preserve the label", () => {
         const beats: Record<number, DependencyBeat> = {};
         recordDependencyBeat(beats, 1, { id: 1, status: 0 });
@@ -66,7 +75,10 @@ describe("current suppression observations", () => {
         }
     });
     test("reload/reconnect snapshots reconcile in either order without a new child heartbeat", () => {
-        for (const order of [[1, 3], [3, 1]]) {
+        for (const order of [
+            [1, 3],
+            [3, 1],
+        ]) {
             const beats: Record<number, DependencyBeat> = {};
             assert.deepEqual(dependencyObservations(monitors(), beats), {});
             recordDependencyBeat(beats, order[0], { id: 10, status: 0 });

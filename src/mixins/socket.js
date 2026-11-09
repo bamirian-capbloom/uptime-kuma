@@ -130,6 +130,8 @@ export default {
             if (navigator.onLine) {
                 const previousStatus = this.dependencyBeats[monitorID]?.status;
                 recordDependencyBeat(this.dependencyBeats, Number(monitorID), beat, live);
+                // Keep displayed health aligned with the observation used by labels.
+                beat = this.dependencyBeats[monitorID];
                 if (reconcile && previousStatus !== this.dependencyBeats[monitorID]?.status) {
                     this.reconcileDependencyObservations();
                 }
