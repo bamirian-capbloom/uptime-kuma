@@ -15,19 +15,24 @@ explanation and a tooltip available on hover or keyboard focus (Escape dismisses
 it). It uses the existing warning palette, wraps on small screens and names the
 failed ancestor, including transitive dependencies.
 
-Only live `heartbeat` events with backend `dependencyNotification.suppressed ===
-true`, `reason: ancestor-down`, and a matching active ancestor can establish a
-label for a DOWN child. An already-known non-DOWN blocker rejects a delayed
-suppression decision. DOWN alone, unknown/retrying dependencies and historical
-heartbeat responses never establish suppression. A subsequent child or ancestor
-heartbeat (including a history response replacing the displayed latest beat with a different observation)
-invalidates the old observation; a fresh backend child decision can
-establish it again. Configuration changes, deletion, logout and disconnection
-clear cached observations immediately. Browser offline events also clear them,
-without waiting for the Socket.IO heartbeat timeout. Consequently, after loading/reconnecting,
-or after an ancestor update, an indicator may be absent until the next child
-heartbeat. Absence means no current confirmation, not a guarantee of delivery.
-This deliberately conservative policy avoids presenting stale suppression as fact.
+The label is reconciled from the authenticated dependency graph and confirmed
+heartbeat states: the child must be DOWN and an active ancestor must be DOWN.
+The closest active DOWN ancestor blocks, matching the notification gate; paused
+or maintenance ancestors do not block but their ancestors still can. Unknown or
+retrying states alone never establish suppression. Repeated DOWN checks preserve
+the label. Recovery, dependency edits, pause and deletion reconcile it immediately.
+The label describes current blocking of failure alerts, not past delivery success.
+Ancestor activity uses its own stored flag, matching the backend notification gate
+even when a containing group is paused; the child's displayed activity still
+controls whether its label is shown.
+
+Disconnection, browser offline events and logout clear the connection's confirmed
+observations. Login heartbeat snapshots restore labels on reload/reconnect without
+waiting for the child to check again. Lazy history can supply confirmation, but an
+older stored heartbeat cannot replace a newer live observation. UTC heartbeat
+timestamps order live events (normal checks emit before storage and have no ID);
+same-time history cannot override a live decision. Child metadata
+from a prior check cannot override a parent recovery.
 
 No heartbeat status, history, uptime, dashboard health counter or notification
 behavior is changed. Public status pages, public badges and historical event
@@ -35,7 +40,7 @@ status components retain their existing semantics and do not expose dependency
 names or metadata. New text is in `src/lang/en.json`, using the project's English
 fallback for locales that do not yet have translations.
 
-Coverage includes graph validation and live-observation invalidation unit tests,
+Coverage includes graph validation and state reconciliation unit tests,
 and browser tests for saving/clearing, self/cycle filtering, real push heartbeat
 suppression, unchanged DOWN status, dashboard/list/details labels, reconnect,
 keyboard explanations and mobile/dark presentation.

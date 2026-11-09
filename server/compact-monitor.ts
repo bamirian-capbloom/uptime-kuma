@@ -12,6 +12,7 @@ export interface CompactMonitor {
     active: boolean | undefined;
     parent: number | null;
     dependencyMonitorId: number | null;
+    dependencyActive: boolean;
     childrenIDs: number[];
     tags: unknown[];
     path: string[];
@@ -29,6 +30,7 @@ export interface CompactMonitor {
  * @param monitor.type Monitor type
  * @param monitor.parent Parent group ID
  * @param monitor.dependency_monitor_id Direct dependency ID
+ * @param monitor.active Monitor's own activity setting
  * @param monitor.interval Check interval in seconds
  * @param monitor.weight Display order weight
  * @param preloadData Data prepared for the whole list
@@ -41,6 +43,7 @@ export function toCompactMonitor(
         type: string;
         parent?: number | null;
         dependency_monitor_id?: number | null;
+        active?: boolean | number;
         interval: number;
         weight?: number | null;
     },
@@ -55,6 +58,7 @@ export function toCompactMonitor(
         active: preloadData.activeStatus.get(monitor.id),
         parent: monitor.parent ?? null,
         dependencyMonitorId: monitor.dependency_monitor_id ?? null,
+        dependencyActive: Boolean(monitor.active),
         childrenIDs: preloadData.childrenIDs.get(monitor.id) || [],
         tags: preloadData.tags.get(monitor.id) || [],
         path,

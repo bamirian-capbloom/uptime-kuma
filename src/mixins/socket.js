@@ -1,4 +1,4 @@
-import { invalidateDependencyHistory, recordDependencyObservation } from "../monitor-dependency";
+import { dependencyObservations, recordDependencyBeat } from "../monitor-dependency";
 import { markRaw } from "vue";
 import { io } from "socket.io-client";
 import { useToast } from "vue-toastification";
@@ -45,6 +45,7 @@ export default {
             monitorTypeList: {},
             maintenanceList: {},
             dependencyObservations: {},
+            dependencyBeats: {},
             heartbeatList: {},
             // Kept in sync incrementally by the heartbeat handlers. As computed values they
             // were rebuilt over all monitors on every beat (thousands of monitors = hot loop)
@@ -103,16 +104,38 @@ export default {
          */
         clearDependencyObservations() {
             this.dependencyObservations = {};
+            this.dependencyBeats = {};
+        },
+
+        /**
+         * Reconcile labels after configuration or confirmed health changes.
+         * @returns {void}
+         */
+        reconcileDependencyObservations() {
+            this.dependencyObservations = navigator.onLine
+                ? dependencyObservations(this.monitorList, this.dependencyBeats)
+                : {};
         },
 
         /**
          * Store the newest beat of a monitor and its display status.
-         * Called per beat: must stay O(1), thousands of monitors beat every minute.
+         * Reconcile dependencies only on health changes, and once per login batch.
          * @param {number} monitorID Monitor id
          * @param {object} beat Heartbeat
+         * @param {boolean} reconcile Reconcile labels immediately (false for login batches)
+         * @param {boolean} live Whether the observation is a live socket event
          * @returns {void}
          */
-        updateLastBeat(monitorID, beat) {
+        updateLastBeat(monitorID, beat, reconcile = true, live = false) {
+            if (navigator.onLine) {
+                const previousStatus = this.dependencyBeats[monitorID]?.status;
+                recordDependencyBeat(this.dependencyBeats, Number(monitorID), beat, live);
+                // Keep displayed health aligned with the observation used by labels.
+                beat = this.dependencyBeats[monitorID];
+                if (reconcile && previousStatus !== this.dependencyBeats[monitorID]?.status) {
+                    this.reconcileDependencyObservations();
+                }
+            }
             applyBeat(this, monitorID, beat, this.statusEntryFor(beat));
             this.heartbeatVersionThrottle.schedule();
         },
@@ -198,9 +221,9 @@ export default {
             });
 
             socket.on("monitorList", (data) => {
-                this.dependencyObservations = {};
                 this.assignMonitorUrlParser(data);
                 this.monitorList = data;
+                this.reconcileDependencyObservations();
                 this.monitorListLoaded = true;
 
                 // Tell the server the list is painted, so it sends the heavier heartbeat and
@@ -218,18 +241,19 @@ export default {
             });
 
             socket.on("updateMonitorIntoList", (data) => {
-                this.dependencyObservations = {};
                 this.assignMonitorUrlParser(data);
                 Object.entries(data).forEach(([monitorID, updatedMonitor]) => {
                     this.monitorList[monitorID] = updatedMonitor;
                 });
+                this.reconcileDependencyObservations();
             });
 
             socket.on("deleteMonitorFromList", (monitorID) => {
-                this.dependencyObservations = {};
+                delete this.dependencyBeats[monitorID];
                 if (this.monitorList[monitorID]) {
                     delete this.monitorList[monitorID];
                 }
+                this.reconcileDependencyObservations();
             });
 
             socket.on("monitorTypeList", (data) => {
@@ -268,20 +292,12 @@ export default {
             });
 
             socket.on("heartbeat", (data) => {
-                if (navigator.onLine) {
-                    recordDependencyObservation(
-                        this.dependencyObservations,
-                        this.monitorList,
-                        data,
-                        this.lastHeartbeatList
-                    );
-                }
                 if (!(data.monitorID in this.heartbeatList)) {
                     this.heartbeatList[data.monitorID] = [];
                 }
 
                 this.heartbeatList[data.monitorID].push(data);
-                this.updateLastBeat(data.monitorID, data);
+                this.updateLastBeat(data.monitorID, data, true, true);
 
                 if (this.heartbeatList[data.monitorID].length >= 150) {
                     this.heartbeatList[data.monitorID].shift();
@@ -315,12 +331,6 @@ export default {
                     this.heartbeatList[monitorID] = data.concat(this.heartbeatList[monitorID]);
                 }
                 if (data.length > 0) {
-                    invalidateDependencyHistory(
-                        this.dependencyObservations,
-                        Number(monitorID),
-                        this.lastHeartbeatList[monitorID],
-                        data[data.length - 1]
-                    );
                     this.updateLastBeat(monitorID, data[data.length - 1]);
                 }
             });
@@ -330,15 +340,10 @@ export default {
                     const beats = data[monitorID];
                     applyLatestBeats(this.heartbeatList, monitorID, beats);
                     if (beats.length > 0) {
-                        invalidateDependencyHistory(
-                            this.dependencyObservations,
-                            Number(monitorID),
-                            this.lastHeartbeatList[monitorID],
-                            beats[beats.length - 1]
-                        );
-                        this.updateLastBeat(monitorID, beats[beats.length - 1]);
+                        this.updateLastBeat(monitorID, beats[beats.length - 1], false);
                     }
                 }
+                this.reconcileDependencyObservations();
             });
 
             socket.on("avgPing", (monitorID, data) => {
@@ -367,7 +372,7 @@ export default {
             });
 
             socket.on("connect_error", (err) => {
-                this.dependencyObservations = {};
+                this.clearDependencyObservations();
                 console.error(`Failed to connect to the backend. Socket.io connect_error: ${err.message}`);
                 this.connectionErrorMsg = `${this.$t("Cannot connect to the socket server.")} [${err}] ${this.$t("Reconnecting...")}`;
                 this.showReverseProxyGuide = true;
@@ -376,7 +381,7 @@ export default {
             });
 
             socket.on("disconnect", () => {
-                this.dependencyObservations = {};
+                this.clearDependencyObservations();
                 console.log("disconnect");
                 // As we are using cookie based auth, we have to reconnect the socket
                 // avoid noise by add a delay
@@ -663,7 +668,7 @@ export default {
          */
         clearData() {
             console.log("reset heartbeat list");
-            this.dependencyObservations = {};
+            this.clearDependencyObservations();
             this.heartbeatList = {};
             this.lastHeartbeatList = {};
             this.statusList = {};
