@@ -42,6 +42,7 @@ describe("toCompactMonitor()", () => {
             active: true,
             parent: null,
             dependencyMonitorId: null,
+            dependencyActive: false,
             childrenIDs: [2, 3],
             tags: [{ tag_id: 5, name: "env" }],
             path: ["Group", "Child"],
@@ -64,6 +65,15 @@ describe("toCompactMonitor()", () => {
         assert.strictEqual(compact.pathName, "");
         assert.strictEqual(compact.parent, null);
         assert.strictEqual(compact.weight, null);
+    });
+
+    test("preserves an ancestor's own activity when its group is paused", () => {
+        const compact = toCompactMonitor(
+            { id: 1, name: "Ancestor", type: "http", interval: 60, active: 1 },
+            preload({ activeStatus: new Map([[1, false]]) })
+        );
+        assert.strictEqual(compact.active, false);
+        assert.strictEqual(compact.dependencyActive, true);
     });
 
     test("does not include sensitive monitor fields", () => {
