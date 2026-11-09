@@ -40,91 +40,67 @@ export interface SuppressionObservation {
     ancestors: number[];
 }
 
+/** Only observations received during the current connection are eligible. */
 export interface DependencyBeat {
-    monitorID: number;
+    id?: number;
     status: number;
-    dependencyNotification?: {
-        suppressed?: boolean;
-        reason?: string;
-        suppressedByMonitorId?: number;
-    };
+    time?: string;
 }
 
 /**
- * Invalidate a decision when its child or any ancestor receives another observation,
- * including a historical response that replaces the UI's latest heartbeat.
- * @param observations Cached live decisions
- * @param monitorId Monitor whose displayed observation is changing
+ * Accept live checks and login/history snapshots without rolling back a newer check.
+ * @param beats Observations from this connection (mutated in place)
+ * @param monitorId Monitor receiving a check
+ * @param beat Live or stored heartbeat
+ * @param live Whether this is an ordered live socket event
  * @returns {void}
  */
-export function invalidateDependencyObservation(
-    observations: Record<number, SuppressionObservation>,
-    monitorId: number
+export function recordDependencyBeat(
+    beats: Record<number, DependencyBeat>,
+    monitorId: number,
+    beat: DependencyBeat,
+    live = false
 ): void {
-    for (const [id, observation] of Object.entries(observations)) {
-        if (Number(id) === monitorId || observation.ancestors.includes(monitorId)) {
-            delete observations[Number(id)];
+    const previous = beats[monitorId];
+    if (previous) {
+        if (previous.time && beat.time) {
+            // Live checks are emitted before normal monitors are stored, so they
+            // have no database ID. Both paths carry the UTC check timestamp.
+            const previousTime = Date.parse(previous.time.replace(" ", "T").replace(/Z?$/, "Z"));
+            const nextTime = Date.parse(beat.time.replace(" ", "T").replace(/Z?$/, "Z"));
+            if (nextTime < previousTime || (!live && nextTime === previousTime)) {
+                return;
+            }
+        } else if (!live && previous.id != null && (beat.id == null || beat.id < previous.id)) {
+            return;
         }
     }
-}
-
-interface StoredDependencyBeat {
-    id?: number;
-    status?: number;
+    beats[monitorId] = beat;
 }
 
 /**
- * A history response may replace the UI's latest beat. Preserve confirmation only
- * when it is the same stored observation, never create confirmation from history.
- * @param observations Cached live decisions
- * @param monitorId Monitor receiving history
- * @param previous Previously displayed beat
- * @param next Beat the history handler will display
- * @returns {void}
- */
-export function invalidateDependencyHistory(
-    observations: Record<number, SuppressionObservation>,
-    monitorId: number,
-    previous: StoredDependencyBeat | undefined,
-    next: StoredDependencyBeat
-): void {
-    if (previous?.id == null || previous.id !== next.id || previous.status !== next.status) {
-        invalidateDependencyObservation(observations, monitorId);
-    }
-}
-
-/**
- * Keep only live backend-confirmed suppression. Any ancestor observation invalidates
- * the old decision until the child checks again. History must never call this.
- * @param observations Live suppression observations (mutated in place)
+ * Reconcile current suppression using the same active-ancestor DOWN rule as the
+ * notification gate. History supplies confirmed states on reload; metadata on an
+ * older child check cannot override a newer parent recovery. No delivery state is
+ * inferred: this only describes whether failure alerts are currently blocked.
  * @param monitors Current authenticated configuration
- * @param beat Live heartbeat event
- * @param latestBeats Latest known observations, to reject a delayed decision after recovery
- * @returns {void}
+ * @param beats Confirmed observations from this connection
+ * @returns Current suppression labels
  */
-export function recordDependencyObservation(
-    observations: Record<number, SuppressionObservation>,
+export function dependencyObservations(
     monitors: Record<number, DependencyMonitor>,
-    beat: DependencyBeat,
-    latestBeats: Record<number, { status: number }> = {}
-): void {
-    invalidateDependencyObservation(observations, Number(beat.monitorID));
-    const monitor = monitors[beat.monitorID];
-    const metadata = beat.dependencyNotification;
-    if (
-        !monitor?.active ||
-        beat.status !== DOWN ||
-        metadata?.suppressed !== true ||
-        metadata.reason !== "ancestor-down"
-    ) {
-        return;
+    beats: Record<number, DependencyBeat>
+): Record<number, SuppressionObservation> {
+    const observations: Record<number, SuppressionObservation> = {};
+    for (const monitor of Object.values(monitors)) {
+        if (!monitor.active || beats[monitor.id]?.status !== DOWN) {
+            continue;
+        }
+        const ancestors = dependencyChain(monitors, monitor.dependencyMonitorId, monitor.id);
+        const blockerId = ancestors?.find(id => monitors[id].active && beats[id]?.status === DOWN);
+        if (blockerId != null) {
+            observations[monitor.id] = { blockerId, ancestors: ancestors! };
+        }
     }
-    const ancestors = dependencyChain(monitors, monitor.dependencyMonitorId, monitor.id);
-    const blockerId = Number(metadata.suppressedByMonitorId);
-    if (latestBeats[blockerId] && latestBeats[blockerId].status !== DOWN) {
-        return;
-    }
-    if (ancestors?.includes(blockerId) && monitors[blockerId]?.active) {
-        observations[beat.monitorID] = { blockerId, ancestors };
-    }
+    return observations;
 }

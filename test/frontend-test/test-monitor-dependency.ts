@@ -2,11 +2,10 @@ import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 import {
     dependencyChain,
-    invalidateDependencyObservation,
-    invalidateDependencyHistory,
-    recordDependencyObservation,
+    dependencyObservations,
+    recordDependencyBeat,
+    type DependencyBeat,
     type DependencyMonitor,
-    type SuppressionObservation,
 } from "../../src/monitor-dependency";
 
 /**
@@ -21,12 +20,6 @@ function monitors(): Record<number, DependencyMonitor> {
         4: { id: 4, name: "Other", active: true, dependencyMonitorId: null },
     };
 }
-
-const suppressedBeat = {
-    monitorID: 3,
-    status: 0,
-    dependencyNotification: { suppressed: true, reason: "ancestor-down", suppressedByMonitorId: 1 },
-};
 
 describe("dependency selection", () => {
     test("allows None, independent monitors and transitive ancestors including paused monitors", () => {
@@ -46,84 +39,80 @@ describe("dependency selection", () => {
     });
 });
 
-describe("live suppression observations", () => {
-    test("uses backend metadata without changing heartbeat status, supports transitive blockers", () => {
-        const observations: Record<number, SuppressionObservation> = {};
-        recordDependencyObservation(observations, monitors(), suppressedBeat);
-        assert.deepEqual(observations[3], { blockerId: 1, ancestors: [2, 1] });
-        assert.equal(suppressedBeat.status, 0);
+describe("current suppression observations", () => {
+    test("repeated child, parent, intermediate and unrelated DOWN beats preserve the label", () => {
+        const beats: Record<number, DependencyBeat> = {};
+        recordDependencyBeat(beats, 1, { id: 1, status: 0 });
+        recordDependencyBeat(beats, 3, { id: 2, status: 0 });
+        for (let id = 3; id < 30; id++) {
+            for (const monitorId of [1, 2, 3, 4]) {
+                recordDependencyBeat(beats, monitorId, { id, status: 0 });
+                assert.deepEqual(dependencyObservations(monitors(), beats)[3], { blockerId: 1, ancestors: [2, 1] });
+            }
+        }
     });
-    test("never infers suppression from DOWN, unknown/retrying metadata, or history without metadata", () => {
-        for (const status of [0, 1, 2, 3]) {
-            const observations = {};
-            recordDependencyObservation(observations, monitors(), { monitorID: 3, status });
-            assert.deepEqual(observations, {});
+    test("removes labels immediately on child or blocker recovery, pending or maintenance", () => {
+        for (const monitorId of [1, 3]) {
+            for (const status of [1, 2, 3]) {
+                const beats = { 1: { status: 0 }, 3: { status: 0 } };
+                recordDependencyBeat(beats, monitorId, { status });
+                assert.deepEqual(dependencyObservations(monitors(), beats), {});
+            }
         }
-        const observations = {};
-        recordDependencyObservation(observations, monitors(), {
-            ...suppressedBeat,
-            dependencyNotification: { suppressed: false, reason: "ancestor-unconfirmed" },
-        });
-        assert.deepEqual(observations, {});
     });
-    test("rejects inactive, missing, unrelated and recovered blockers, and non-DOWN children", () => {
-        for (const status of [1, 2, 3]) {
-            const observations = {};
-            recordDependencyObservation(observations, monitors(), { ...suppressedBeat, status });
-            assert.deepEqual(observations, {});
-            recordDependencyObservation(observations, monitors(), suppressedBeat, { 1: { status } });
-            assert.deepEqual(observations, {});
+    test("unknown children and ancestors do not establish suppression", () => {
+        for (const beats of [{}, { 1: { status: 0 } }, { 3: { status: 0 } }]) {
+            assert.deepEqual(dependencyObservations(monitors(), beats), {});
         }
-        for (const blocker of [2, 4, 99]) {
-            const observations = {};
-            recordDependencyObservation(observations, monitors(), {
-                ...suppressedBeat,
-                dependencyNotification: { ...suppressedBeat.dependencyNotification, suppressedByMonitorId: blocker },
-            });
-            assert.deepEqual(observations, {});
+    });
+    test("reload/reconnect snapshots reconcile in either order without a new child heartbeat", () => {
+        for (const order of [[1, 3], [3, 1]]) {
+            const beats: Record<number, DependencyBeat> = {};
+            assert.deepEqual(dependencyObservations(monitors(), beats), {});
+            recordDependencyBeat(beats, order[0], { id: 10, status: 0 });
+            assert.deepEqual(dependencyObservations(monitors(), beats), {});
+            recordDependencyBeat(beats, order[1], { id: 11, status: 0 });
+            assert.equal(dependencyObservations(monitors(), beats)[3].blockerId, 1);
+            // A new connection starts with no trusted observations.
+            assert.deepEqual(dependencyObservations(monitors(), {}), {});
         }
+    });
+    test("delayed history cannot roll back live recovery or a newer DOWN observation", () => {
+        const beats = { 1: { id: 20, status: 1 }, 3: { id: 21, status: 0 } };
+        recordDependencyBeat(beats, 1, { id: 19, status: 0 });
+        recordDependencyBeat(beats, 1, { status: 0 });
+        assert.deepEqual(dependencyObservations(monitors(), beats), {});
+        recordDependencyBeat(beats, 1, { id: 22, status: 0 });
+        recordDependencyBeat(beats, 3, { id: 18, status: 1 });
+        assert.equal(dependencyObservations(monitors(), beats)[3].blockerId, 1);
+        recordDependencyBeat(beats, 3, { id: 23, status: 1 });
+        assert.deepEqual(dependencyObservations(monitors(), beats), {});
+    });
+    test("configuration changes, deletion, pause and malformed chains reconcile immediately", () => {
+        const beats = { 1: { status: 0 }, 3: { status: 0 }, 4: { status: 0 } };
         const list = monitors();
+        list[3].dependencyMonitorId = 4;
+        assert.equal(dependencyObservations(list, beats)[3].blockerId, 4);
+        list[3].dependencyMonitorId = null;
+        assert.deepEqual(dependencyObservations(list, beats), {});
+        list[3].dependencyMonitorId = 2;
+        list[1].active = false;
+        assert.deepEqual(dependencyObservations(list, beats), {});
+        list[1].active = true;
         list[3].active = false;
-        const observations = {};
-        recordDependencyObservation(observations, list, suppressedBeat);
-        assert.deepEqual(observations, {});
+        assert.deepEqual(dependencyObservations(list, beats), {});
+        list[3].active = true;
+        list[1].dependencyMonitorId = 3;
+        assert.deepEqual(dependencyObservations(list, beats), {});
+        delete list[1];
+        assert.deepEqual(dependencyObservations(list, beats), {});
     });
-    test("invalidates on child or ancestor beats but preserves observations on unrelated beats", () => {
-        for (const id of [1, 2, 3, 4]) {
-            const observations: Record<number, SuppressionObservation> = {};
-            recordDependencyObservation(observations, monitors(), suppressedBeat);
-            recordDependencyObservation(observations, monitors(), { monitorID: id, status: 1 });
-            assert.equal(Boolean(observations[3]), id === 4);
-        }
-    });
-    test("historical latest-beat replacements invalidate live claims without reestablishing them", () => {
-        const observations: Record<number, SuppressionObservation> = {};
-        recordDependencyObservation(observations, monitors(), suppressedBeat);
-        invalidateDependencyObservation(observations, 4);
-        assert.equal(observations[3].blockerId, 1);
-        invalidateDependencyObservation(observations, 1);
-        assert.deepEqual(observations, {});
-        recordDependencyObservation(observations, monitors(), suppressedBeat);
-        invalidateDependencyObservation(observations, 3);
-        assert.deepEqual(observations, {});
-    });
-    test("the same stored beat in history preserves confirmation, changed or unidentified beats invalidate it", () => {
-        const observations: Record<number, SuppressionObservation> = {};
-        recordDependencyObservation(observations, monitors(), suppressedBeat);
-        invalidateDependencyHistory(observations, 3, { id: 10, status: 0 }, { id: 10, status: 0 });
-        assert.equal(observations[3].blockerId, 1);
-        invalidateDependencyHistory(observations, 3, { id: 10, status: 0 }, { id: 11, status: 1 });
-        assert.deepEqual(observations, {});
-        recordDependencyObservation(observations, monitors(), suppressedBeat);
-        invalidateDependencyHistory(observations, 1, undefined, { status: 1 });
-        assert.deepEqual(observations, {});
-    });
-    test("a fresh backend decision reestablishes suppression after invalidation", () => {
-        const observations: Record<number, SuppressionObservation> = {};
-        recordDependencyObservation(observations, monitors(), suppressedBeat);
-        recordDependencyObservation(observations, monitors(), { monitorID: 1, status: 1 });
-        assert.deepEqual(observations, {});
-        recordDependencyObservation(observations, monitors(), suppressedBeat, { 1: { status: 0 } });
-        assert.equal(observations[3].blockerId, 1);
+    test("uses the closest active DOWN ancestor and falls back when it recovers", () => {
+        const list = monitors();
+        list[2].active = true;
+        const beats = { 1: { status: 0 }, 2: { status: 0 }, 3: { status: 0 } };
+        assert.equal(dependencyObservations(list, beats)[3].blockerId, 2);
+        recordDependencyBeat(beats, 2, { status: 1 });
+        assert.equal(dependencyObservations(list, beats)[3].blockerId, 1);
     });
 });

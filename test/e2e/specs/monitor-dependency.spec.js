@@ -79,14 +79,34 @@ test("shows backend suppression while preserving DOWN, clears stale state and su
     const label = page.locator(".suppression-label").last();
     await expect(label).toBeVisible();
     await expect(label).toHaveAttribute("aria-label", /Dependency Gateway is down/);
+    // Observe DOM removals too: a disappear/reappear between assertions is a regression.
+    await page.evaluate(() => {
+        window.suppressionFlickers = 0;
+        const observer = new MutationObserver(() => {
+            if (!document.querySelector(".suppression-label")) {
+                window.suppressionFlickers++;
+            }
+        });
+        observer.observe(document.querySelector("#app"), { childList: true, subtree: true });
+        window.suppressionObserver = observer;
+    });
+    for (let i = 0; i < 3; i++) {
+        await push(request, gateway.url, "down");
+        await push(request, service.url, "down");
+        await expect(label).toBeVisible();
+    }
+    expect(await page.evaluate(() => {
+        window.suppressionObserver.disconnect();
+        return window.suppressionFlickers;
+    })).toBe(0);
     await expect(page.getByTestId("monitor-list").locator(".suppression-label")).toHaveCount(1);
     await label.focus();
     await expect(page.locator(".suppression-explanation")).toContainText("Dependency Gateway is down");
     await label.press("Escape");
     await expect(page.locator(".suppression-explanation")).toHaveCount(0);
     await page.goto("./dashboard");
-    // History/reconnect has no live metadata; it must not claim current suppression.
-    await expect(page.locator(".suppression-label")).toHaveCount(0);
+    // Login snapshots reconcile suppression without another child check.
+    await expect(page.locator(".suppression-label")).toHaveCount(2);
     await push(request, service.url, "down");
     await expect(page.locator(".suppression-label")).toHaveCount(2);
     await expect(page.locator(".num.text-danger")).toHaveText("2");
@@ -116,9 +136,30 @@ test("shows backend suppression while preserving DOWN, clears stale state and su
     await push(request, gateway.url, "down");
     await push(request, service.url, "down");
     await expect(page.locator(".suppression-label").last()).toBeVisible();
+    await push(request, service.url, "up");
+    await expect(page.locator(".suppression-label")).toHaveCount(0);
+    await push(request, service.url, "down");
+    await expect(label).toBeVisible();
     await page.context().setOffline(true);
     await expect(page.locator(".suppression-label")).toHaveCount(0);
     await page.context().setOffline(false);
+    await page.reload();
+    await expect(page.locator(".suppression-label").last()).toBeVisible();
+    await page.evaluate(() => {
+        const root = document.querySelector("#app").__vue_app__._container._vnode.component.proxy;
+        root.getSocket().disconnect();
+    });
+    await expect(page.locator(".suppression-label")).toHaveCount(0);
+    await page.evaluate(() => {
+        const root = document.querySelector("#app").__vue_app__._container._vnode.component.proxy;
+        root.getSocket().connect();
+    });
+    await expect(label).toBeVisible();
+    await page.getByRole("link", { name: "Edit", exact: true }).click();
+    await page.getByLabel("Monitor Dependency", { exact: true }).selectOption({ label: "None" });
+    await page.getByTestId("save-button").click();
+    await expect(page.getByText("Saved.", { exact: true })).toBeVisible();
+    await expect(page.locator(".suppression-label")).toHaveCount(0);
     await page.reload();
     await expect(page.locator(".suppression-label")).toHaveCount(0);
 });
