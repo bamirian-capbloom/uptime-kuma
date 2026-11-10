@@ -1,5 +1,6 @@
 import { dependencyObservations, recordDependencyBeat } from "../monitor-dependency";
-import { markRaw } from "vue";
+import { DependencyDownToasts } from "../dependency-down-toasts";
+import { markRaw, toRaw } from "vue";
 import { io } from "socket.io-client";
 import { useToast } from "vue-toastification";
 import Favico from "favico.js";
@@ -44,6 +45,7 @@ export default {
             monitorList: {},
             monitorTypeList: {},
             maintenanceList: {},
+            dependencyDownToasts: markRaw(new DependencyDownToasts(toast)),
             dependencyObservations: {},
             dependencyBeats: {},
             heartbeatList: {},
@@ -115,6 +117,7 @@ export default {
             this.dependencyObservations = navigator.onLine
                 ? dependencyObservations(this.monitorList, this.dependencyBeats)
                 : {};
+            this.dependencyDownToasts.reconcile(this.dependencyObservations);
         },
 
         /**
@@ -308,9 +311,14 @@ export default {
                 if (data.important) {
                     if (this.monitorList[data.monitorID] !== undefined) {
                         if (data.status === 0) {
-                            toast.error(`[${this.monitorList[data.monitorID].name}] [DOWN] ${data.msg}`, {
-                                timeout: getToastErrorTimeout(),
-                            });
+                            this.dependencyDownToasts.show(
+                                data.monitorID,
+                                data,
+                                toRaw(this.dependencyBeats[data.monitorID]),
+                                this.dependencyObservations,
+                                `[${this.monitorList[data.monitorID].name}] [DOWN] ${data.msg}`,
+                                getToastErrorTimeout()
+                            );
                         } else if (data.status === 1) {
                             toast.success(`[${this.monitorList[data.monitorID].name}] [Up] ${data.msg}`, {
                                 timeout: getToastSuccessTimeout(),
