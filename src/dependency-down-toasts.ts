@@ -1,3 +1,4 @@
+import { UP } from "./util";
 import type { DependencyBeat, SuppressionObservation } from "./monitor-dependency";
 
 type ToastId = string | number;
@@ -53,12 +54,16 @@ export class DependencyDownToasts {
     }
 
     /**
-     * Dismiss only DOWN toasts whose monitors are currently suppressed.
+     * Dismiss only DOWN toasts whose monitors are suppressed or confirmed UP.
      * @param observations Current dependency suppression
+     * @param beats Newest accepted observations from the current connection
      * @returns {void}
      */
-    reconcile(observations: Observations): void {
-        for (const monitorId of Object.keys(observations).map(Number)) {
+    reconcile(observations: Observations, beats: Record<number, DependencyBeat> = {}): void {
+        for (const monitorId of this.visible.keys()) {
+            if (!observations[monitorId] && beats[monitorId]?.status !== UP) {
+                continue;
+            }
             const ids = this.visible.get(monitorId);
             this.visible.delete(monitorId);
             for (const id of ids ?? []) {

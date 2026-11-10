@@ -117,7 +117,7 @@ export default {
             this.dependencyObservations = navigator.onLine
                 ? dependencyObservations(this.monitorList, this.dependencyBeats)
                 : {};
-            this.dependencyDownToasts.reconcile(this.dependencyObservations);
+            this.dependencyDownToasts.reconcile(this.dependencyObservations, this.dependencyBeats);
         },
 
         /**
