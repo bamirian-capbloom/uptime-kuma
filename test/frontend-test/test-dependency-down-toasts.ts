@@ -49,7 +49,7 @@ function dashboard() {
         const beat = { status, time };
         recordDependencyBeat(beats, monitorId, beat, live);
         const observations = dependencyObservations(monitors, beats);
-        toasts.reconcile(observations);
+        toasts.reconcile(observations, beats);
         if (important && status === 0 && live) {
             toasts.show(monitorId, beat, toRaw(beats[monitorId]), observations, String(monitorId), false);
         }
@@ -90,7 +90,7 @@ test("parent recovery does not replay suppressed events; subsequent child failur
     d.heartbeat(3, 1, "2026-11-09 12:01:00");
     d.heartbeat(3, 0, "2026-11-09 12:02:00");
     assert.deepEqual(d.shown, [1, 3]);
-    assert.deepEqual(d.dismissed, []);
+    assert.deepEqual(d.dismissed, [1]);
 });
 
 test("intermediate recovery still suppresses against the failed root", () => {
@@ -110,7 +110,7 @@ test("stale child DOWN events cannot toast after recovery; stale parent snapshot
     d.heartbeat(3, 1, "2026-11-09 12:02:00");
     d.heartbeat(3, 0, "2026-11-09 12:01:00");
     assert.deepEqual(d.shown, [3]);
-    assert.deepEqual(d.dismissed, []);
+    assert.deepEqual(d.dismissed, [1]);
 });
 
 test("history arriving child-first or parent-first dismisses only confirmed suppressed toasts", () => {
@@ -141,7 +141,7 @@ test("closed toasts are forgotten and delayed close callbacks cannot forget a ne
     d.heartbeat(3, 0, "2026-11-09 12:03:00");
     d.closes.get(3)!();
     d.heartbeat(1, 0, "2026-11-09 12:04:00");
-    assert.deepEqual(d.dismissed, [3, 5]);
+    assert.deepEqual(d.dismissed, [2, 3, 4, 5]);
 });
 
 test("configuration changes reconcile existing toasts using the existing suppression helper", () => {
@@ -234,7 +234,54 @@ test("socket handlers preserve history, important events, UP and generic toasts 
         ]);
         assert.deepEqual(dismissed, [1]);
         assert.equal(important.length, 6);
+        heartbeat(4, 1);
+        assert.deepEqual(dismissed, [1, 2]);
+        assert.equal(shown.at(-1), "[Unrelated] [Up] check");
+        state.clearDependencyObservations();
+        state.reconcileDependencyObservations();
+        assert.deepEqual(dismissed, [1, 2]);
+        handlers.get("heartbeatLists")!({
+            1: [{ status: 1, time: "2026-11-09 12:01:00" }],
+        });
+        assert.deepEqual(dismissed, [1, 2, 3]);
+        assert.equal(shown.at(-1), "[Unrelated] [Up] check");
     } finally {
         state.heartbeatVersionThrottle.cancel();
     }
+});
+
+test("recovery clears all repeats only for that monitor, including non-important snapshots", () => {
+    const d = dashboard();
+    d.heartbeat(4, 0);
+    d.heartbeat(4, 0);
+    d.heartbeat(3, 0);
+    d.heartbeat(4, 1, "2026-11-09 12:01:00", false, false);
+    d.heartbeat(4, 1, "2026-11-09 12:01:00", false, false);
+    assert.deepEqual(d.dismissed, [1, 2]);
+    assert.deepEqual(d.shown, [4, 4, 3]);
+});
+
+test("rapid DOWN UP DOWN preserves the new alert against stale recovery and old close callbacks", () => {
+    const d = dashboard();
+    d.heartbeat(4, 0);
+    d.heartbeat(4, 1, "2026-11-09 12:01:00");
+    d.heartbeat(4, 0, "2026-11-09 12:02:00");
+    d.closes.get(1)!();
+    d.heartbeat(4, 1, "2026-11-09 12:01:00");
+    d.heartbeat(4, 1, "2026-11-09 12:02:00", false, false);
+    assert.deepEqual(d.dismissed, [1]);
+    d.heartbeat(4, 1, "2026-11-09 12:03:00");
+    assert.deepEqual(d.dismissed, [1, 2]);
+});
+
+test("reconnect waits for confirmed state before clearing an existing DOWN toast", () => {
+    const d = dashboard();
+    d.heartbeat(4, 0);
+    for (const id of Object.keys(d.beats)) {
+        delete d.beats[Number(id)];
+    }
+    d.toasts.reconcile({}, d.beats);
+    assert.deepEqual(d.dismissed, []);
+    d.heartbeat(4, 1, "2026-11-09 12:01:00", false, false);
+    assert.deepEqual(d.dismissed, [1]);
 });
